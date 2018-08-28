@@ -113,10 +113,12 @@ struct cf_mod {
 	struct {
 		struct cgw_csum_xor xor;
 		struct cgw_csum_crc8 crc8;
+		struct cgw_csum_sum sum;
 	} csum;
 	struct {
 		void (*xor)(struct can_frame *cf, struct cgw_csum_xor *xor);
 		void (*crc8)(struct can_frame *cf, struct cgw_csum_crc8 *crc8);
+		void (*sum)(struct can_frame *cf, struct cgw_csum_sum *sum);
 	} csumfunc;
 	u32 uid;
 };
@@ -371,6 +373,50 @@ static void cgw_csum_crc8_neg(struct can_frame *cf, struct cgw_csum_crc8 *crc8)
 	cf->data[crc8->result_idx] = crc^crc8->final_xor_val;
 }
 
+static void cgw_csum_sum_rel(struct can_frame *cf, struct cgw_csum_sum *sum)
+{
+	int from = calc_idx(sum->from_idx, cf->can_dlc);
+	int to = calc_idx(sum->to_idx, cf->can_dlc);
+	int res = calc_idx(sum->result_idx, cf->can_dlc);
+	u8 cs = 0;
+	int i;
+
+	if (from < 0 || to < 0 || res < 0)
+		return;
+
+	if (from <= to) {
+		for (i = sum->from_idx; i <= sum->to_idx; i++)
+			cs += cf->data[i];
+	} else {
+		for (i = sum->from_idx; i >= sum->to_idx; i--)
+			cs += cf->data[i];
+	}
+
+	cf->data[sum->result_idx] = cs;
+}
+
+static void cgw_csum_sum_pos(struct can_frame *cf, struct cgw_csum_sum *sum)
+{
+	u8 cs = 0;
+	int i;
+
+	for (i = sum->from_idx; i <= sum->to_idx; i++)
+		cs += cf->data[i];
+
+	cf->data[sum->result_idx] = cs;
+}
+
+static void cgw_csum_sum_neg(struct can_frame *cf, struct cgw_csum_sum *sum)
+{
+	u8 cs = 0;
+	int i;
+
+	for (i = sum->from_idx; i >= sum->to_idx; i--)
+		cs += cf->data[i];
+
+	cf->data[sum->result_idx] = cs;
+}
+
 static void cgw_count(struct can_frame *cf, struct cgw_counter *msgcounter)
 {
 	u8 count = msgcounter->value + 1;
@@ -466,6 +512,9 @@ static void can_can_gw_rcv(struct sk_buff *skb, void *data)
 
 		if (gwj->mod.csumfunc.xor)
 			(*gwj->mod.csumfunc.xor)(cf, &gwj->mod.csum.xor);
+
+		if (gwj->mod.csumfunc.sum)
+			(*gwj->mod.csumfunc.sum)(cf, &gwj->mod.csum.sum);
 	}
 
 	/* clear the skb timestamp if not configured the other way */
@@ -613,6 +662,12 @@ static int cgw_put_job(struct sk_buff *skb, struct cgw_job *gwj, int type,
 			goto cancel;
 	}
 
+	if (gwj->mod.csumfunc.sum) {
+		if (nla_put(skb, CGW_CS_SUM, CGW_CS_SUM_LEN,
+			    &gwj->mod.csum.sum) < 0)
+			goto cancel;
+	}
+
 	if (gwj->gwtype == CGW_TYPE_CAN_CAN) {
 
 		if (gwj->ccgw.filter.can_id || gwj->ccgw.filter.can_mask) {
@@ -669,6 +724,7 @@ static const struct nla_policy cgw_policy[CGW_MAX+1] = {
 	[CGW_COUNTER]	= { .len = sizeof(struct cgw_counter) },
 	[CGW_CS_XOR]	= { .len = sizeof(struct cgw_csum_xor) },
 	[CGW_CS_CRC8]	= { .len = sizeof(struct cgw_csum_crc8) },
+	[CGW_CS_SUM]	= { .len = sizeof(struct cgw_csum_sum) },
 	[CGW_SRC_IF]	= { .type = NLA_U32 },
 	[CGW_DST_IF]	= { .type = NLA_U32 },
 	[CGW_FILTER]	= { .len = sizeof(struct can_filter) },
@@ -828,6 +884,28 @@ static int cgw_parse_attr(struct nlmsghdr *nlh, struct cf_mod *mod,
 				mod->csumfunc.xor = cgw_csum_xor_pos;
 			else
 				mod->csumfunc.xor = cgw_csum_xor_neg;
+		}
+
+		if (tb[CGW_CS_SUM]) {
+			struct cgw_csum_sum *c = nla_data(tb[CGW_CS_SUM]);
+
+			err = cgw_chk_csum_parms(c->from_idx, c->to_idx,
+						 c->result_idx);
+			if (err)
+				return err;
+
+			nla_memcpy(&mod->csum.sum, tb[CGW_CS_SUM],
+				   CGW_CS_SUM_LEN);
+
+			// select dedicated processing function to reduce
+			// runtime operations in receive hot path.
+			if (c->from_idx < 0 || c->to_idx < 0 ||
+			    c->result_idx < 0)
+				mod->csumfunc.sum = cgw_csum_sum_rel;
+			else if (c->from_idx <= c->to_idx)
+				mod->csumfunc.sum = cgw_csum_sum_pos;
+			else
+				mod->csumfunc.sum = cgw_csum_sum_neg;
 		}
 
 		if (tb[CGW_MOD_UID]) {

@@ -72,6 +72,7 @@ enum {
 	CGW_COUNTER,	/* set message counter into data[index] */
 	CGW_CS_XOR,	/* set data[] XOR checksum into data[index] */
 	CGW_CS_CRC8,	/* set data[] CRC8 checksum into data[index] */
+	CGW_CS_SUM,	/* set data[] SUM checksum into data[index] */
 	CGW_HANDLED,	/* number of handled CAN frames */
 	CGW_DROPPED,	/* number of dropped CAN frames */
 	CGW_SRC_IF,	/* ifindex of source network interface */
@@ -135,9 +136,16 @@ struct cgw_csum_crc8 {
 	__u8 profile_data[20];
 } __attribute__((packed));
 
+struct cgw_csum_sum {
+	__s8 from_idx;
+	__s8 to_idx;
+	__s8 result_idx;
+} __attribute__((packed));
+
 /* length of checksum operation parameters. idx = index in CAN frame data[] */
 #define CGW_CS_XOR_LEN  sizeof(struct cgw_csum_xor)
 #define CGW_CS_CRC8_LEN  sizeof(struct cgw_csum_crc8)
+#define CGW_CS_SUM_LEN  sizeof(struct cgw_csum_sum)
 
 /* CRC8 profiles (compute CRC for additional data elements - see below) */
 enum {
