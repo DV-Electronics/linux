@@ -115,12 +115,14 @@ struct cf_mod {
 		struct cgw_csum_crc8 crc8;
 		struct cgw_csum_sum sum;
 		struct cgw_csum_1comp onesComp;
+		struct cgw_csum_2comp twosComp;
 	} csum;
 	struct {
 		void (*xor)(struct can_frame *cf, struct cgw_csum_xor *xor);
 		void (*crc8)(struct can_frame *cf, struct cgw_csum_crc8 *crc8);
 		void (*sum)(struct can_frame *cf, struct cgw_csum_sum *sum);
 		void (*onesComp)(struct can_frame *cf, struct cgw_csum_1comp *onesComp);
+		void (*twosComp)(struct can_frame *cf, struct cgw_csum_2comp *twosComp);
 	} csumfunc;
 	u32 uid;
 };
@@ -424,6 +426,11 @@ static void cgw_csum_do1sComp(struct can_frame *cf, struct cgw_csum_1comp *onesC
 	cf->data[onesComp->result_idx] = cf->data[onesComp->result_idx]^0xff;
 }
 
+static void cgw_csum_do2sComp(struct can_frame *cf, struct cgw_csum_2comp *twosComp)
+{
+	cf->data[twosComp->result_idx] = (cf->data[twosComp->result_idx]^0xff)+1;
+}
+
 static void cgw_count(struct can_frame *cf, struct cgw_counter *msgcounter)
 {
 	u8 count = msgcounter->value + 1;
@@ -525,6 +532,9 @@ static void can_can_gw_rcv(struct sk_buff *skb, void *data)
 
 		if (gwj->mod.csumfunc.onesComp)
 			(*gwj->mod.csumfunc.onesComp)(cf, &gwj->mod.csum.onesComp);
+
+		if (gwj->mod.csumfunc.twosComp)
+			(*gwj->mod.csumfunc.twosComp)(cf, &gwj->mod.csum.twosComp);
 	}
 
 	/* clear the skb timestamp if not configured the other way */
@@ -684,6 +694,12 @@ static int cgw_put_job(struct sk_buff *skb, struct cgw_job *gwj, int type,
 			goto cancel;
 	}
 
+	if (gwj->mod.csumfunc.twosComp) {
+		if (nla_put(skb, CGW_CS_2COMP, CGW_CS_2COMP_LEN,
+			    &gwj->mod.csum.twosComp) < 0)
+			goto cancel;
+	}
+
 	if (gwj->gwtype == CGW_TYPE_CAN_CAN) {
 
 		if (gwj->ccgw.filter.can_id || gwj->ccgw.filter.can_mask) {
@@ -742,6 +758,7 @@ static const struct nla_policy cgw_policy[CGW_MAX+1] = {
 	[CGW_CS_CRC8]	= { .len = sizeof(struct cgw_csum_crc8) },
 	[CGW_CS_SUM]	= { .len = sizeof(struct cgw_csum_sum) },
 	[CGW_CS_1COMP]	= { .len = sizeof(struct cgw_csum_1comp) },
+	[CGW_CS_2COMP]	= { .len = sizeof(struct cgw_csum_2comp) },
 	[CGW_SRC_IF]	= { .type = NLA_U32 },
 	[CGW_DST_IF]	= { .type = NLA_U32 },
 	[CGW_FILTER]	= { .len = sizeof(struct can_filter) },
@@ -936,6 +953,19 @@ static int cgw_parse_attr(struct nlmsghdr *nlh, struct cf_mod *mod,
 				   CGW_CS_1COMP_LEN);
 
 			mod->csumfunc.onesComp = cgw_csum_do1sComp;
+		}
+
+		if (tb[CGW_CS_2COMP]) {
+			struct cgw_csum_2comp *c = nla_data(tb[CGW_CS_2COMP]);
+
+			err = cgw_chk_result_idx_parm(c->result_idx);
+			if (err)
+				return err;
+
+			nla_memcpy(&mod->csum.twosComp, tb[CGW_CS_2COMP],
+				   CGW_CS_2COMP_LEN);
+
+			mod->csumfunc.twosComp = cgw_csum_do2sComp;
 		}
 
 		if (tb[CGW_MOD_UID]) {

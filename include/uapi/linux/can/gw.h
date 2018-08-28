@@ -74,6 +74,7 @@ enum {
 	CGW_CS_CRC8,	/* set data[] CRC8 checksum into data[index] */
 	CGW_CS_SUM,	/* set data[] SUM checksum into data[index] */
 	CGW_CS_1COMP,	/* set 1s compliment checksum into data[index] */
+	CGW_CS_2COMP,	/* set 2s compliment checksum into data[index] */
 	CGW_HANDLED,	/* number of handled CAN frames */
 	CGW_DROPPED,	/* number of dropped CAN frames */
 	CGW_SRC_IF,	/* ifindex of source network interface */
@@ -147,11 +148,16 @@ struct cgw_csum_1comp {
 	__s8 result_idx;
 } __attribute__((packed));
 
+struct cgw_csum_2comp {
+	__s8 result_idx;
+} __attribute__((packed));
+
 /* length of checksum operation parameters. idx = index in CAN frame data[] */
 #define CGW_CS_XOR_LEN  sizeof(struct cgw_csum_xor)
 #define CGW_CS_CRC8_LEN  sizeof(struct cgw_csum_crc8)
 #define CGW_CS_SUM_LEN  sizeof(struct cgw_csum_sum)
 #define CGW_CS_1COMP_LEN  sizeof(struct cgw_csum_1comp)
+#define CGW_CS_2COMP_LEN  sizeof(struct cgw_csum_2comp)
 
 /* CRC8 profiles (compute CRC for additional data elements - see below) */
 enum {
