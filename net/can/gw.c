@@ -101,6 +101,14 @@ struct cf_mod {
 	void (*modfunc[MAX_MODFUNCTIONS])(struct can_frame *cf,
 					  struct cf_mod *mod);
 
+	/* CAN frame counter increment after CAN frame modifications */
+	struct {
+		struct cgw_counter msgcounter;
+	} counter;
+	struct {
+		void (*msgcounter)(struct can_frame *cf, struct cgw_counter *msgcounter);
+	} counterfunc;
+
 	/* CAN frame checksum calculation after CAN frame modifications */
 	struct {
 		struct cgw_csum_xor xor;
@@ -196,6 +204,23 @@ static int cgw_chk_csum_parms(s8 fr, s8 to, s8 re)
 	if (fr > -9 && fr < 8 &&
 	    to > -9 && to < 8 &&
 	    re > -9 && re < 8)
+		return 0;
+	else
+		return -EINVAL;
+}
+
+static int cgw_chk_result_idx_parm(s8 re)
+{
+	/*
+	 * absolute dlc values 0 .. 7 => 0 .. 7, e.g. data [0]
+	 * relative to received dlc -1 .. -8 :
+	 * e.g. for received dlc = 8
+	 * -1 => index = 7 (data[7])
+	 * -3 => index = 5 (data[5])
+	 * -8 => index = 0 (data[0])
+	 */
+
+	if (re > -9 && re < 8)
 		return 0;
 	else
 		return -EINVAL;
@@ -346,6 +371,18 @@ static void cgw_csum_crc8_neg(struct can_frame *cf, struct cgw_csum_crc8 *crc8)
 	cf->data[crc8->result_idx] = crc^crc8->final_xor_val;
 }
 
+static void cgw_count(struct can_frame *cf, struct cgw_counter *msgcounter)
+{
+	u8 count = msgcounter->value + 1;
+
+	if(count > msgcounter->max_count)
+		count = 0; // roll over the counter
+
+	msgcounter->value = count; // increment for next time
+
+	cf->data[msgcounter->result_idx] = count;
+}
+
 /* the receive & process & send function */
 static void can_can_gw_rcv(struct sk_buff *skb, void *data)
 {
@@ -418,8 +455,12 @@ static void can_can_gw_rcv(struct sk_buff *skb, void *data)
 	while (modidx < MAX_MODFUNCTIONS && gwj->mod.modfunc[modidx])
 		(*gwj->mod.modfunc[modidx++])(cf, &gwj->mod);
 
-	/* check for checksum updates when the CAN frame has been modified */
 	if (modidx) {
+		/* check for counter updates when the CAN frame has been modified */
+		if (gwj->mod.counterfunc.msgcounter)
+			(*gwj->mod.counterfunc.msgcounter)(cf, &gwj->mod.counter.msgcounter);
+
+		/* check for checksum updates when the CAN frame has been modified */
 		if (gwj->mod.csumfunc.crc8)
 			(*gwj->mod.csumfunc.crc8)(cf, &gwj->mod.csum.crc8);
 
@@ -554,6 +595,12 @@ static int cgw_put_job(struct sk_buff *skb, struct cgw_job *gwj, int type,
 			goto cancel;
 	}
 
+	if (gwj->mod.counterfunc.msgcounter) {
+		if (nla_put(skb, CGW_COUNTER, CGW_COUNTER_LEN,
+			    &gwj->mod.counter.msgcounter) < 0)
+			goto cancel;
+	}
+
 	if (gwj->mod.csumfunc.crc8) {
 		if (nla_put(skb, CGW_CS_CRC8, CGW_CS_CRC8_LEN,
 			    &gwj->mod.csum.crc8) < 0)
@@ -619,6 +666,7 @@ static const struct nla_policy cgw_policy[CGW_MAX+1] = {
 	[CGW_MOD_OR]	= { .len = sizeof(struct cgw_frame_mod) },
 	[CGW_MOD_XOR]	= { .len = sizeof(struct cgw_frame_mod) },
 	[CGW_MOD_SET]	= { .len = sizeof(struct cgw_frame_mod) },
+	[CGW_COUNTER]	= { .len = sizeof(struct cgw_counter) },
 	[CGW_CS_XOR]	= { .len = sizeof(struct cgw_csum_xor) },
 	[CGW_CS_CRC8]	= { .len = sizeof(struct cgw_csum_crc8) },
 	[CGW_SRC_IF]	= { .type = NLA_U32 },
@@ -718,9 +766,22 @@ static int cgw_parse_attr(struct nlmsghdr *nlh, struct cf_mod *mod,
 			mod->modfunc[modidx++] = mod_set_data;
 	}
 
-	/* check for checksum operations after CAN frame modifications */
 	if (modidx) {
+		/* check for counter operations after CAN frame modifications */
+		if (tb[CGW_COUNTER]) {
+			struct cgw_counter *c = nla_data(tb[CGW_COUNTER]);
 
+			err = cgw_chk_result_idx_parm(c->result_idx);
+			if (err)
+				return err;
+
+			nla_memcpy(&mod->counter.msgcounter, tb[CGW_COUNTER],
+				   CGW_COUNTER_LEN);
+
+			mod->counterfunc.msgcounter = cgw_count;
+		}
+
+		/* check for checksum operations after CAN frame modifications */
 		if (tb[CGW_CS_CRC8]) {
 			struct cgw_csum_crc8 *c = nla_data(tb[CGW_CS_CRC8]);
 
@@ -1040,3 +1101,4 @@ static __exit void cgw_module_exit(void)
 
 module_init(cgw_module_init);
 module_exit(cgw_module_exit);
+

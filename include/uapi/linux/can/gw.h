@@ -69,6 +69,7 @@ enum {
 	CGW_MOD_OR,	/* CAN frame modification binary OR */
 	CGW_MOD_XOR,	/* CAN frame modification binary XOR */
 	CGW_MOD_SET,	/* CAN frame modification set alternate values */
+	CGW_COUNTER,	/* set message counter into data[index] */
 	CGW_CS_XOR,	/* set data[] XOR checksum into data[index] */
 	CGW_CS_CRC8,	/* set data[] CRC8 checksum into data[index] */
 	CGW_HANDLED,	/* number of handled CAN frames */
@@ -106,6 +107,16 @@ struct cgw_frame_mod {
 
 #define CGW_MODATTR_LEN sizeof(struct cgw_frame_mod)
 
+/* message counter modifiers */
+struct cgw_counter {
+	__s8 result_idx;// byte index of the counter
+	__u8 max_count;	// roll over counter when you hit this maximum
+	__u8 value;	// incremented every time that a message is sent
+} __attribute__((packed));
+/* length of message counter parameters. idx = index in CAN frame data[] */
+#define CGW_COUNTER_LEN  sizeof(struct cgw_counter)
+
+/* checksum modifiers */
 struct cgw_csum_xor {
 	__s8 from_idx;
 	__s8 to_idx;
@@ -161,7 +172,7 @@ enum {
  * Limit the number of hops of this specific rule. Usually the received CAN
  * frame can be processed as much as 'max_hops' times (which is given at module
  * load time of the can-gw module). This value is used to reduce the number of
- * possible hops for this gateway rule to a value smaller then max_hops.
+ * possible hops for this gateway rule to a value smaller than max_hops.
  *
  * CGW_MOD_UID (length 4 bytes):
  * Optional non-zero user defined routing job identifier to alter existing
@@ -206,3 +217,4 @@ enum {
  */
 
 #endif /* !_UAPI_CAN_GW_H */
+
